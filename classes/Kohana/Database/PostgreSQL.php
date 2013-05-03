@@ -164,9 +164,9 @@ class Kohana_Database_PostgreSQL extends Database
 
 		try
 		{
-			if ($type === Database::INSERT AND $this->_config['primary_key'])
+			if ($type === Database::INSERT)
 			{
-				$sql .= ' RETURNING '.$this->quote_identifier($this->_config['primary_key']);
+				$sql .= ' RETURNING *';
 			}
 
 			try
@@ -219,19 +219,16 @@ class Kohana_Database_PostgreSQL extends Database
 
 			if ($type === Database::INSERT)
 			{
-				if ($this->_config['primary_key'])
+				$primary_keys = $this->list_primary_keys(pg_field_table($result, 0));
+				if (count($primary_keys) == 1)
 				{
-					// Fetch the first column of the last row
-					$insert_id = pg_fetch_result($result, $rows - 1, 0);
+					$insert_id = pg_fetch_result($result, $rows - 1, pg_field_num($result, $primary_keys[0]));
 				}
-				elseif ($insert_id = pg_send_query($this->_connection, 'SELECT LASTVAL()'))
+				else
 				{
-					if ($result = pg_get_result($this->_connection) AND pg_result_status($result) === PGSQL_TUPLES_OK)
-					{
-						$insert_id = pg_fetch_result($result, 0);
-					}
+					$insert_id = array();
+					foreach ($primary_keys as $pk) $insert_id[] = pg_fetch_result($result, $rows - 1, pg_field_num($result, $pk));
 				}
-
 				return array($insert_id, $rows);
 			}
 
@@ -248,6 +245,8 @@ class Kohana_Database_PostgreSQL extends Database
 		}
 	}
 
+	protected $inTransaction_ = false;
+
 	/**
 	 * Start a SQL transaction
 	 *
@@ -258,13 +257,16 @@ class Kohana_Database_PostgreSQL extends Database
 	 */
 	public function begin($mode = NULL)
 	{
-		return $this->_command("BEGIN $mode");
+		return $this->inTransaction_ = $this->_command("BEGIN $mode");
 	}
 
 	public function commit()
 	{
+		$this->inTransaction_ = false;
 		return $this->_command('COMMIT');
 	}
+
+	public function inTransaction() { return $this->inTransaction_; }
 
 	/**
 	 * Abort the current transaction or roll back to a savepoint
@@ -274,6 +276,7 @@ class Kohana_Database_PostgreSQL extends Database
 	 */
 	public function rollback($savepoint = NULL)
 	{
+		if (!$savepoint) $this->inTransaction_ = false;
 		return $this->_command($savepoint ? "ROLLBACK TO $savepoint" : 'ROLLBACK');
 	}
 
@@ -340,6 +343,22 @@ class Kohana_Database_PostgreSQL extends Database
 		return $this->query(Database::SELECT, $sql, FALSE)->as_array(NULL, 'table_name');
 	}
 
+	public function list_primary_keys($table, $add_prefix = TRUE)
+	{
+		$this->_connection OR $this->connect();
+
+		$sql = 'SELECT c.column_name FROM information_schema.table_constraints tc'
+		     . ' JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_name)'
+		     . ' JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name'
+		     . ' WHERE constraint_type = \'PRIMARY KEY\' AND tc.table_schema = '.$this->quote($this->schema()) . ' AND tc.table_name = '.$this->quote($add_prefix ? ($this->table_prefix().$table) : $table)
+		     . ' ORDER BY ordinal_position';
+
+		$result = array();
+		foreach ($this->query(Database::SELECT, $sql, FALSE) as $column) $result[] = $column['column_name'];
+		
+		return $result;
+	}
+
 	public function list_columns($table, $like = NULL, $add_prefix = TRUE)
 	{
 		$this->_connection OR $this->connect();
@@ -366,7 +385,7 @@ class Kohana_Database_PostgreSQL extends Database
 
 			$result[$column['column_name']] = $column;
 		}
-
+		
 		return $result;
 	}
 

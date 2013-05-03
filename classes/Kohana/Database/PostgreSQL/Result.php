@@ -56,6 +56,43 @@ class Kohana_Database_PostgreSQL_Result extends Database_Result
 		}
 	}
 
+	protected function fixType($value, $column)
+	{
+		if ($value === NULL) return NULL;
+		switch ($type = pg_field_type($this->_result, is_numeric($column) ? $column : pg_field_num($this->_result, $column)))
+		{
+			case 'bool':
+				if ($value == 't') return true;
+				else if ($value == 'f') return false;
+				else return (bool)$value;
+			case 'int2':
+			case 'int4':
+			case 'int8':
+				return (int)$value;
+			case 'float2':
+			case 'float4':
+			case 'float8':
+			case 'numeric':
+				return (float)$value;
+		}
+		return $value;
+	}
+
+	protected function fixTypes($row)
+	{
+		if (is_array($row))
+		{
+			$i = 0;
+			foreach ($row as $column => $val) $row[$column] = $this->fixType($val, $i++);
+		}
+		else if (is_object($row))
+		{
+			$i = 0;
+			foreach ($row as $column => $val) $row->{$column} = $this->fixType($val, $i++);
+		}
+		return $row;
+	}
+
 	public function as_array($key = NULL, $value = NULL)
 	{
 		if ($this->_total_rows === 0)
@@ -69,11 +106,12 @@ class Kohana_Database_PostgreSQL_Result extends Database_Result
 			if ($value === NULL)
 			{
 				// Indexed rows
-				return pg_fetch_all($this->_result);
+				return array_map(array($this, 'fixTypes'), pg_fetch_all($this->_result));
 			}
 
 			// Indexed columns
-			return pg_fetch_all_columns($this->_result, pg_field_num($this->_result, $value));
+			$t = $this;
+			return array_map(function($val) use($t, $value) { return $t->fixType($val, $value); }, pg_fetch_all_columns($this->_result, pg_field_num($this->_result, $value)));
 		}
 
 		return parent::as_array($key, $value);
@@ -101,12 +139,12 @@ class Kohana_Database_PostgreSQL_Result extends Database_Result
 			return FALSE;
 
 		if ( ! $this->_as_object)
-			return pg_fetch_assoc($this->_result, $this->_current_row);
+			return $this->fixTypes(pg_fetch_assoc($this->_result, $this->_current_row));
 
 		if ( ! $this->_object_params)
-			return pg_fetch_object($this->_result, $this->_current_row, $this->_as_object);
+			return $this->fixTypes(pg_fetch_object($this->_result, $this->_current_row, $this->_as_object));
 
-		return pg_fetch_object($this->_result, $this->_current_row, $this->_as_object, $this->_object_params);
+		return $this->fixTypes(pg_fetch_object($this->_result, $this->_current_row, $this->_as_object, $this->_object_params));
 	}
 
 }
